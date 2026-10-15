@@ -34,7 +34,7 @@ public class CameraService extends Service implements Camera.PreviewCallback {
 
     private int previewWidth = 1280;
     private int previewHeight = 720;
-    private int jpegQuality = 65;
+    private int jpegQuality = 70;
     private int maxZoom = 0;
 
     @Override
@@ -87,7 +87,6 @@ public class CameraService extends Service implements Camera.PreviewCallback {
                 maxZoom = params.getMaxZoom();
             }
 
-            // 匹配最接近的分辨率
             List<Camera.Size> sizes = params.getSupportedPreviewSizes();
             Camera.Size bestSize = sizes.get(0);
             int minDiff = Integer.MAX_VALUE;
@@ -156,11 +155,10 @@ public class CameraService extends Service implements Camera.PreviewCallback {
 
     @Override
     public void onPreviewFrame(byte[] data, Camera cam) {
-        // 无人观看时不进行JPEG编码，实现零发热省电
         if (activeClients <= 0) return;
 
         long now = System.currentTimeMillis();
-        if (now - lastFrameTime < 80) return; // 限制约 12 FPS，丝滑且不发烫
+        if (now - lastFrameTime < 80) return;
         lastFrameTime = now;
 
         try {
@@ -229,10 +227,10 @@ public class CameraService extends Service implements Camera.PreviewCallback {
             } else if (requestLine.startsWith("GET /hd?v=")) {
                 String mode = requestLine.split(" ")[1].replace("/hd?v=", "");
                 if ("1".equals(mode)) {
-                    jpegQuality = 85;
+                    jpegQuality = 88;
                     startCamera(1920, 1080);
                 } else {
-                    jpegQuality = 65;
+                    jpegQuality = 70;
                     startCamera(1280, 720);
                 }
                 sendSimpleOk(out);
@@ -258,38 +256,90 @@ public class CameraService extends Service implements Camera.PreviewCallback {
 
     private String getHtmlPage() {
         return "<!DOCTYPE html><html><head><meta charset='utf-8'>" +
-                "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes'>" +
+                "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no'>" +
                 "<title>书房实时看护</title>" +
                 "<style>" +
-                "body{margin:0;background:#000;color:#fff;font-family:sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100vh;}" +
-                "#viewBox{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;}" +
-                "#cam{max-width:100%;max-height:100%;transition:transform 0.2s ease;}" +
-                ".bar{background:rgba(20,20,20,0.85);padding:12px 16px;z-index:10;border-top:1px solid #333;}" +
-                ".row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}" +
-                "input[type=range]{flex:1;margin:0 12px; accent-color:#00e676; height:24px;}" +
-                "button{background:#2b2b2b;color:#fff;border:1px solid #555;padding:8px 14px;border-radius:6px;font-size:14px;}" +
+                "body{margin:0;background:#000;color:#fff;font-family:sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100vh;user-select:none;-webkit-user-select:none;}" +
+                "#viewBox{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;touch-action:none;cursor:grab;}" +
+                "#viewBox:active{cursor:grabbing;}" +
+                "#cam{max-width:100%;max-height:100%;transform-origin:center center;will-change:transform;}" +
+                ".tip{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);padding:4px 12px;border-radius:20px;font-size:12px;color:#aaa;pointer-events:none;z-index:5;}" +
+                ".bar{background:rgba(20,20,20,0.92);padding:10px 14px;z-index:10;border-top:1px solid #333;}" +
+                ".row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:6px;}" +
+                ".row:last-child{margin-bottom:0;}" +
+                "input[type=range]{flex:1;margin:0 8px;accent-color:#00e676;height:22px;}" +
+                "button{background:#2b2b2b;color:#fff;border:1px solid #555;padding:8px 10px;border-radius:6px;font-size:13px;flex:1;white-space:nowrap;}" +
                 "button:active{background:#00e676;color:#000;}" +
                 "</style></head><body>" +
-                "<div id='viewBox'><img id='cam' src='/stream' onclick='doFocus()' /></div>" +
+                "<div id='viewBox'>" +
+                "<div class='tip' id='tipText'>💡 双指任意位置放大 / 单指自由拖拽平移 (电脑可用滚轮)</div>" +
+                "<img id='cam' src='/stream' draggable='false' />" +
+                "</div>" +
                 "<div class='bar'>" +
                 "<div class='row'>" +
-                "<span>镜头拉近: <b id='zv'>0%</b></span>" +
-                "<input type='range' min='0' max='100' value='0' oninput='doZoom(this.value)' />" +
+                "<span style='font-size:13px;'>画面放大: <b id='sv'>1.0x</b></span>" +
+                "<input type='range' id='sRange' min='10' max='80' value='10' oninput='doSliderScale(this.value)' />" +
+                "<span style='font-size:13px;'>镜头光学: <b id='zv'>0%</b></span>" +
+                "<input type='range' id='zRange' min='0' max='100' value='0' oninput='doZoom(this.value)' />" +
                 "</div>" +
                 "<div class='row'>" +
-                "<button onclick='doRotate()'>🔄 旋转画面</button>" +
-                "<button onclick='doFocus()'>🎯 重新对焦</button>" +
-                "<button id='hdbtn' onclick='toggleHd()'>⚡ 切换1080P超清</button>" +
+                "<button onclick='resetView()'>Reset 居中复位</button>" +
+                "<button onclick='doRotate()'>🔄 旋转</button>" +
+                "<button onclick='doFocus()'>🎯 对焦</button>" +
+                "<button id='hdbtn' onclick='toggleHd()'>⚡ 1080P超清</button>" +
                 "</div></div>" +
                 "<script>" +
-                "let deg=0, isHd=0;" +
-                "function doZoom(v){document.getElementById('zv').innerText=v+'%'; fetch('/zoom?v='+v);}" +
-                "function doFocus(){fetch('/focus');}" +
-                "function doRotate(){deg=(deg+90)%360; const img=document.getElementById('cam');" +
-                "const scale=(deg%180!==0)?(window.innerWidth/window.innerHeight):1;" +
-                "img.style.transform='rotate('+deg+'deg)';}" +
-                "function toggleHd(){isHd=isHd?0:1; fetch('/hd?v='+isHd);" +
-                "document.getElementById('hdbtn').innerText=isHd?'✅ 已开1080P(点击回720P)':'⚡ 切换1080P超清';}" +
+                "const box=document.getElementById('viewBox'), img=document.getElementById('cam');" +
+                "let scale=1, pointX=0, pointY=0, startX=0, startY=0, deg=0, isHd=0;" +
+                "let isDragging=false, initialPinchDist=0, initialScale=1;" +
+                "setTimeout(()=>{document.getElementById('tipText').style.display='none';}, 5000);" +
+                "function updateTransform(){" +
+                "  img.style.transform=`translate(${pointX}px, ${pointY}px) scale(${scale}) rotate(${deg}deg)`;" +
+                "  document.getElementById('sv').innerText=scale.toFixed(1)+'x';" +
+                "  document.getElementById('sRange').value=Math.round(scale*10);" +
+                "}" +
+                "function doSliderScale(v){ scale=v/10.0; updateTransform(); }" +
+                "function resetView(){ scale=1; pointX=0; pointY=0; updateTransform(); }" +
+                "function doRotate(){ deg=(deg+90)%360; updateTransform(); }" +
+                "function doZoom(v){ document.getElementById('zv').innerText=v+'%'; fetch('/zoom?v='+v); }" +
+                "function doFocus(){ fetch('/focus'); }" +
+                "function toggleHd(){" +
+                "  isHd=isHd?0:1; fetch('/hd?v='+isHd);" +
+                "  document.getElementById('hdbtn').innerText=isHd?'✅ 已开1080P':'⚡ 1080P超清';" +
+                "  document.getElementById('hdbtn').style.borderColor=isHd?'#00e676':'#555';" +
+                "}" +
+                // 手机触摸：单指任意拖拽 + 双指自由缩放
+                "box.addEventListener('touchstart', e=>{" +
+                "  if(e.touches.length===1){" +
+                "    isDragging=true; startX=e.touches[0].clientX-pointX; startY=e.touches[0].clientY-pointY;" +
+                "  }else if(e.touches.length===2){" +
+                "    isDragging=false;" +
+                "    initialPinchDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);" +
+                "    initialScale=scale;" +
+                "  }" +
+                "});" +
+                "box.addEventListener('touchmove', e=>{" +
+                "  e.preventDefault();" +
+                "  if(e.touches.length===1 && isDragging){" +
+                "    pointX=e.touches[0].clientX-startX; pointY=e.touches[0].clientY-startY;" +
+                "    updateTransform();" +
+                "  }else if(e.touches.length===2 && initialPinchDist>0){" +
+                "    const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);" +
+                "    scale=Math.min(Math.max(1, initialScale*(dist/initialPinchDist)), 8);" +
+                "    updateTransform();" +
+                "  }" +
+                "}, {passive:false});" +
+                "box.addEventListener('touchend', e=>{ if(e.touches.length<2) initialPinchDist=0; if(e.touches.length===0) isDragging=false; });" +
+                // 电脑鼠标：滚轮缩放 + 左键按住拖拽
+                "box.addEventListener('mousedown', e=>{ isDragging=true; startX=e.clientX-pointX; startY=e.clientY-pointY; });" +
+                "window.addEventListener('mousemove', e=>{ if(!isDragging)return; pointX=e.clientX-startX; pointY=e.clientY-startY; updateTransform(); });" +
+                "window.addEventListener('mouseup', ()=>{ isDragging=false; });" +
+                "box.addEventListener('wheel', e=>{" +
+                "  e.preventDefault();" +
+                "  const delta=e.deltaY>0?-0.3:0.3;" +
+                "  scale=Math.min(Math.max(1, scale+delta), 8);" +
+                "  updateTransform();" +
+                "}, {passive:false});" +
                 "</script></body></html>";
     }
 
